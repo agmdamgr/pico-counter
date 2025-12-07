@@ -82,9 +82,9 @@ class ButtonCounter:
         self.update_display()
 
     def should_show_taunt(self):
-        """Determine if we should show a taunt (roughly 1 in 6 chance, but not before 3 clicks)"""
+        """Determine if we should show a taunt (roughly 1 in 10 chance, but not before 5 clicks)"""
         self.clicks_since_taunt += 1
-        if self.clicks_since_taunt >= 3 and random.randint(1, 6) == 1:
+        if self.clicks_since_taunt >= 5 and random.randint(1, 10) == 1:
             self.clicks_since_taunt = 0
             return True
         return False
