@@ -1,10 +1,87 @@
 # Pico 2W Button Counter with OLED Display
 # Count button presses with occasional taunting messages
+#
+# ==================== PINOUT ====================
+#
+#                    Pico 2W
+#                   +-------+
+#             GP0  -|  USB  |- VBUS
+#             GP1  -|       |- VSYS
+#             GND  -|       |- GND
+#             GP2  -|       |- 3V3_EN
+#             GP3  -|       |- 3V3
+#    I2C SDA  GP4 <-|       |- ADC_VREF
+#    I2C SCL  GP5 <-|       |- GP28
+#             GND  -|       |- GND
+#             GP6  -|       |- GP27
+#             GP7  -|       |- GP26
+#             GP8  -|       |- RUN
+#             GP9  -|       |- GP22
+#             GND  -|       |- GND
+#            GP10  -|       |- GP21
+#            GP11  -|       |- GP20
+#            GP12  -|       |- GP19
+#            GP13  -|       |- GP18
+#            GND  -|       |- GND
+#   COUNT    GP14 <-|       |- GP17
+#   RESET    GP15 <-|       |- GP16
+#                   +-------+
+#
+# WIRING:
+# -------
+#   OLED Display (I2C):
+#     VCC  -> 3V3
+#     GND  -> GND
+#     SDA  -> GP4
+#     SCL  -> GP5
+#
+#   Count Button:
+#     One leg  -> GP14
+#     Other    -> GND
+#
+#   Reset Button:
+#     One leg  -> GP15
+#     Other    -> GND
+#
+# (Buttons use internal pull-ups, active LOW)
+# ===============================================
 
 from machine import Pin, I2C
 import time
 import random
+import json
+import network
 from ssd1306 import SSD1306_I2C
+
+def connect_wifi():
+    """Load WiFi credentials and connect"""
+    try:
+        with open("wifi.json", "r") as f:
+            creds = json.load(f)
+
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
+
+        if not wlan.isconnected():
+            print(f"Connecting to {creds['ssid']}...")
+            wlan.connect(creds["ssid"], creds["password"])
+
+            # Wait for connection with timeout
+            timeout = 10
+            while not wlan.isconnected() and timeout > 0:
+                time.sleep(1)
+                timeout -= 1
+
+        if wlan.isconnected():
+            print(f"Connected! IP: {wlan.ifconfig()[0]}")
+            return wlan
+        else:
+            print("WiFi connection failed")
+            return None
+    except Exception as e:
+        print(f"WiFi error: {e}")
+        return None
+
 
 # Pin configuration
 I2C_SDA = 4
@@ -119,15 +196,15 @@ class ButtonCounter:
         # Draw message if active
         if self.message:
             # Word wrap for longer messages
-            self.oled.hline(0, 48, 128, 1)
+            self.oled.hline(0, 46, 128, 1)
             # Truncate or wrap message to fit
             if len(self.message) <= 16:
                 x_pos = (128 - len(self.message) * 8) // 2
-                self.oled.text(self.message, x_pos, 54, 1)
+                self.oled.text(self.message, x_pos, 52, 1)
             else:
                 # Two lines for longer messages
-                self.oled.text(self.message[:16], 0, 48, 1)
-                self.oled.text(self.message[16:32], 0, 56, 1)
+                self.oled.text(self.message[:16], 0, 50, 1)
+                self.oled.text(self.message[16:32], 0, 58, 1)
 
         self.oled.show()
 
@@ -196,5 +273,6 @@ class ButtonCounter:
 
 # Run the counter
 if __name__ == "__main__":
+    connect_wifi()
     counter = ButtonCounter()
     counter.run()
