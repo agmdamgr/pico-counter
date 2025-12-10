@@ -55,28 +55,39 @@ import urequests
 from ssd1306 import SSD1306_I2C
 
 
+# Global WiFi instance - reuse to avoid reconnection delays
+_wlan = None
+
 def connect_wifi():
-    """Load WiFi credentials and connect"""
+    """Load WiFi credentials and connect (reuses existing connection)"""
+    global _wlan
+
     try:
+        # Reuse existing connection if available
+        if _wlan is not None and _wlan.isconnected():
+            return _wlan
+
         with open("wifi.json", "r") as f:
             creds = json.load(f)
 
-        wlan = network.WLAN(network.STA_IF)
-        wlan.active(True)
+        if _wlan is None:
+            _wlan = network.WLAN(network.STA_IF)
 
-        if not wlan.isconnected():
+        _wlan.active(True)
+
+        if not _wlan.isconnected():
             print(f"Connecting to {creds['ssid']}...")
-            wlan.connect(creds["ssid"], creds["password"])
+            _wlan.connect(creds["ssid"], creds["password"])
 
             # Wait for connection with timeout
             timeout = 10
-            while not wlan.isconnected() and timeout > 0:
+            while not _wlan.isconnected() and timeout > 0:
                 time.sleep(1)
                 timeout -= 1
 
-        if wlan.isconnected():
-            print(f"Connected! IP: {wlan.ifconfig()[0]}")
-            return wlan
+        if _wlan.isconnected():
+            print(f"Connected! IP: {_wlan.ifconfig()[0]}")
+            return _wlan
         else:
             print("WiFi connection failed")
             return None
