@@ -54,6 +54,7 @@ import network
 import urequests
 from ssd1306 import SSD1306_I2C
 
+
 def connect_wifi():
     """Load WiFi credentials and connect"""
     try:
@@ -114,10 +115,16 @@ def save_high_score(score):
 
 
 def fetch_ai_taunts(api_key, count=10):
-    """Fetch multiple taunts from Claude API"""
+    """Fetch multiple taunts from Claude API (connects WiFi on-demand)"""
     if not api_key:
         return []
 
+    # Connect WiFi just for this fetch
+    wlan = connect_wifi()
+    if not wlan:
+        return []
+
+    taunts = []
     try:
         headers = {
             "Content-Type": "application/json",
@@ -126,11 +133,11 @@ def fetch_ai_taunts(api_key, count=10):
         }
 
         data = {
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-3-haiku-20240307",
             "max_tokens": 300,
             "messages": [{
                 "role": "user",
-                "content": f"Generate {count} short, funny, sarcastic taunts (each under 20 chars) for someone clicking a button. One per line, no numbering, no quotes."
+                "content": f"Generate {count} very short sarcastic taunts for a button clicker. MAX 15 characters each. Examples: 'Wow. A click.' 'So impressive' 'Try harder'. One per line, no numbers, no quotes."
             }]
         }
 
@@ -144,19 +151,25 @@ def fetch_ai_taunts(api_key, count=10):
             result = response.json()
             text = result["content"][0]["text"].strip()
             response.close()
+            print(f"API response: {text[:100]}")
             # Parse lines into list, filter and trim
-            taunts = []
             for line in text.split("\n"):
                 line = line.strip()
                 if line and len(line) <= 32:
                     taunts.append(line)
             print(f"Fetched {len(taunts)} AI taunts")
-            return taunts
-        response.close()
-        return []
+        else:
+            print(f"API error: {response.status_code}")
+            try:
+                print(response.text[:200])
+            except:
+                pass
+            response.close()
     except Exception as e:
         print(f"AI taunt error: {e}")
-        return []
+
+    # Stay connected - disconnecting causes CYW43 issues on Pico 2W
+    return taunts
 
 
 # Pin configuration
@@ -221,6 +234,20 @@ TAUNTS = [
     "Oh no... anyway",
     "Press F to pay respects",
     "git gud",
+    ":P",
+    ";P",
+    "-_-",
+    "._.",
+    ">_<",
+    "^_^",
+    "o_O",
+    "T_T",
+    "(._. )",
+    "( -_-)",
+    "\\(o_o)/",
+    "(-_-)zzZ",
+    "*slow clap*",
+    "...really?",
 ]
 
 # Reset taunts - shown when counter is reset
@@ -233,6 +260,15 @@ RESET_TAUNTS = [
     "The walk of shame",
     "Reset of defeat",
 ]
+
+# Easter egg messages for special numbers
+EASTER_EGGS = {
+    69: "Nice.",
+    420: "Blaze it",
+    666: "\\m/ HAIL \\m/",
+    1337: "L33T H4X0R",
+    80085: "Really?",
+}
 
 
 class ButtonCounter:
@@ -276,6 +312,17 @@ class ButtonCounter:
         self.confetti_particles = []
         self.last_confetti_update = 0
 
+        # Message scroll state
+        self.msg_line1 = ""
+        self.msg_line2 = ""
+        self.msg_scroll_offset = 0
+        self.last_scroll_update = 0
+
+        # Display power saving
+        self.last_activity = time.ticks_ms()
+        self.display_dimmed = False
+        self.dim_timeout_ms = 30000  # 30 seconds
+
         # Debounce tracking
         self.last_count_press = 0
         self.last_reset_press = 0
@@ -284,10 +331,29 @@ class ButtonCounter:
         # Show initial display
         self.update_display()
 
+    def wake_display(self):
+        """Wake display from dimmed state"""
+        if self.display_dimmed:
+            self.oled.contrast(255)  # Full brightness
+            self.display_dimmed = False
+        self.last_activity = time.ticks_ms()
+
+    def dim_display(self):
+        """Dim display to save power"""
+        if not self.display_dimmed:
+            self.oled.contrast(1)  # Very low but still visible
+            self.display_dimmed = True
+
+    def check_display_timeout(self):
+        """Dim display if idle for too long"""
+        if not self.display_dimmed:
+            if time.ticks_diff(time.ticks_ms(), self.last_activity) >= self.dim_timeout_ms:
+                self.dim_display()
+
     def should_show_taunt(self):
-        """Determine if we should show a taunt (roughly 1 in 15 chance, but not before 10 clicks)"""
+        """Determine if we should show a taunt (roughly 1 in 40 chance, but not before 20 clicks)"""
         self.clicks_since_taunt += 1
-        if self.clicks_since_taunt >= 10 and random.randint(1, 15) == 1:
+        if self.clicks_since_taunt >= 20 and random.randint(1, 40) == 1:
             self.clicks_since_taunt = 0
             return True
         return False
@@ -295,12 +361,12 @@ class ButtonCounter:
     def get_taunt(self):
         """Get a taunt - occasionally from AI cache if available"""
         self.taunts_since_ai += 1
-        # Try AI taunt every 3rd taunt if API key is available
-        if self.api_key and self.taunts_since_ai >= 3:
+        # Try AI taunt every 4th taunt if API key is available
+        if self.api_key and self.taunts_since_ai >= 4:
             self.taunts_since_ai = 0
-            # Refill cache if empty
+            # Fetch initial batch if cache is empty
             if not self.ai_taunt_cache:
-                print("Fetching new AI taunts...")
+                print("Fetching initial AI taunts...")
                 self.ai_taunt_cache = fetch_ai_taunts(self.api_key, 10)
                 print(f"Cache now has {len(self.ai_taunt_cache)} taunts")
             # Pop from cache if available
@@ -343,6 +409,99 @@ class ButtonCounter:
                 'drift': random.randint(-1, 1)
             })
         self.last_confetti_update = time.ticks_ms()
+
+    def easter_egg_animation(self, num):
+        """Play custom animation for easter egg numbers"""
+        if num == 69:
+            # Quick winking face animation
+            for frame in range(6):
+                self.oled.fill(0)
+                self.oled.text("CLICK COUNTER", 10, 2, 1)
+                self.oled.hline(0, 14, 128, 1)
+                self.draw_large_number(69, 24)
+                # Draw winking face below
+                if frame % 2 == 0:
+                    self.oled.text(";)", 56, 48, 1)
+                else:
+                    self.oled.text(":)", 56, 48, 1)
+                self.oled.show()
+                time.sleep_ms(100)
+
+        elif num == 420:
+            # Quick flames on sides
+            for frame in range(8):
+                self.oled.fill(0)
+                self.oled.text("CLICK COUNTER", 10, 2, 1)
+                self.oled.hline(0, 14, 128, 1)
+                self.draw_large_number(420, 24)
+                # Draw flames on left and right
+                for side in [8, 108]:
+                    base_y = 45 - (frame % 5)
+                    for i in range(3):
+                        y = base_y - i * 4 + random.randint(-2, 2)
+                        w = 12 - i * 3
+                        x = side - w // 2 + 6
+                        if 14 < y < 64:
+                            self.oled.fill_rect(x, y, w, 3, 1)
+                self.oled.show()
+                time.sleep_ms(75)
+
+        elif num == 666:
+            # Quick devil horns flashing
+            for frame in range(6):
+                self.oled.fill(0)
+                self.oled.text("CLICK COUNTER", 10, 2, 1)
+                self.oled.hline(0, 14, 128, 1)
+                self.draw_large_number(666, 24)
+                # Draw devil horns
+                if frame % 2 == 0:
+                    # Left horn
+                    for i in range(8):
+                        self.oled.pixel(20 + i, 48 - i, 1)
+                        self.oled.pixel(21 + i, 48 - i, 1)
+                    # Right horn
+                    for i in range(8):
+                        self.oled.pixel(107 - i, 48 - i, 1)
+                        self.oled.pixel(106 - i, 48 - i, 1)
+                self.oled.text("\\m/    \\m/", 20, 52, 1)
+                self.oled.show()
+                time.sleep_ms(100)
+
+        elif num == 1337:
+            # Quick matrix-style falling characters
+            cols = [random.randint(0, 15) for _ in range(16)]
+            for frame in range(8):
+                self.oled.fill(0)
+                self.oled.text("CLICK COUNTER", 10, 2, 1)
+                self.oled.hline(0, 14, 128, 1)
+                self.draw_large_number(1337, 24)
+                # Falling characters
+                for i, col in enumerate(cols):
+                    y = (col + frame * 3) % 50 + 14
+                    if y < 64:
+                        char = chr(random.randint(48, 57))
+                        self.oled.text(char, i * 8, y, 1)
+                self.oled.show()
+                time.sleep_ms(75)
+
+        elif num == 80085:
+            # Quick eye roll animation
+            for frame in range(6):
+                self.oled.fill(0)
+                self.oled.text("CLICK COUNTER", 10, 2, 1)
+                self.oled.hline(0, 14, 128, 1)
+                self.draw_large_number(80085, 24)
+                # Rolling eyes
+                eye_x = 48 + (frame % 4) - 2
+                self.oled.text("(", 40, 50, 1)
+                self.oled.text("-", eye_x, 50, 1)
+                self.oled.text("_", 60, 50, 1)
+                self.oled.text("-", eye_x + 24, 50, 1)
+                self.oled.text(")", 80, 50, 1)
+                self.oled.show()
+                time.sleep_ms(100)
+
+        self.start_confetti()
 
     def explosion_animation(self, score):
         """Animate the score exploding outward"""
@@ -432,9 +591,28 @@ class ButtonCounter:
         self.confetti_particles = active
         return len(active) > 0
 
+    def word_wrap(self, msg, max_chars=16):
+        """Split message into two lines, breaking at spaces"""
+        if len(msg) <= max_chars:
+            return msg, ""
+
+        # Find last space before max_chars
+        break_point = max_chars
+        for i in range(max_chars, 0, -1):
+            if msg[i-1] == ' ':
+                break_point = i - 1
+                break
+
+        line1 = msg[:break_point].strip()
+        line2 = msg[break_point:].strip()
+        return line1, line2
+
     def set_message(self, msg, duration_ms=4000):
         """Set a temporary message to display"""
         self.message = msg
+        self.msg_line1, self.msg_line2 = self.word_wrap(msg)
+        self.msg_scroll_offset = 0
+        self.last_scroll_update = time.ticks_ms()
         self.message_timeout = time.ticks_ms() + duration_ms
 
     def clear_message_if_expired(self):
@@ -463,16 +641,23 @@ class ButtonCounter:
 
         # Draw message if active
         if self.message:
-            # Word wrap for longer messages
-            self.oled.hline(0, 46, 128, 1)
-            # Truncate or wrap message to fit
-            if len(self.message) <= 16:
-                x_pos = (128 - len(self.message) * 8) // 2
-                self.oled.text(self.message, x_pos, 52, 1)
-            else:
-                # Two lines for longer messages
-                self.oled.text(self.message[:16], 0, 50, 1)
-                self.oled.text(self.message[16:32], 0, 58, 1)
+            self.oled.hline(0, 44, 128, 1)
+
+            # Line 1 - centered
+            if self.msg_line1:
+                x1 = (128 - len(self.msg_line1) * 8) // 2
+                self.oled.text(self.msg_line1, max(0, x1), 48, 1)
+
+            # Line 2 - scroll if too long
+            if self.msg_line2:
+                if len(self.msg_line2) <= 16:
+                    x2 = (128 - len(self.msg_line2) * 8) // 2
+                    self.oled.text(self.msg_line2, max(0, x2), 56, 1)
+                else:
+                    # Scrolling text - add padding for smooth loop
+                    scroll_text = self.msg_line2 + "   " + self.msg_line2
+                    visible = scroll_text[self.msg_scroll_offset:self.msg_scroll_offset + 16]
+                    self.oled.text(visible, 0, 56, 1)
 
         self.oled.show()
 
@@ -482,11 +667,20 @@ class ButtonCounter:
         if time.ticks_diff(now, self.last_count_press) < self.debounce_ms:
             return
 
+        self.wake_display()
         self.last_count_press = now
         self.count += 1
 
+        # Check for easter eggs first
+        if self.count in EASTER_EGGS:
+            self.easter_egg_animation(self.count)
+            self.set_message(EASTER_EGGS[self.count])
+            # Still update high score if needed
+            if self.count > self.high_score:
+                self.high_score = self.count
+                save_high_score(self.high_score)
         # Check for new high score
-        if self.count > self.high_score:
+        elif self.count > self.high_score:
             if not self.record_broken:
                 # Just broke the record for first time this session!
                 self.record_broken = True
@@ -516,6 +710,7 @@ class ButtonCounter:
         if time.ticks_diff(now, self.last_reset_press) < self.debounce_ms:
             return
 
+        self.wake_display()
         self.last_reset_press = now
 
         if self.count > 0:
@@ -608,6 +803,7 @@ class ButtonCounter:
                 # Button held - check if past threshold
                 if time.ticks_diff(time.ticks_ms(), reset_press_start) >= hold_threshold_ms:
                     if not showing_stats:
+                        self.wake_display()
                         self.show_stats_screen()
                         showing_stats = True
 
@@ -629,9 +825,22 @@ class ButtonCounter:
             # Clear expired messages
             self.clear_message_if_expired()
 
+            # Update message scroll (every 200ms)
+            if self.message and self.msg_line2 and len(self.msg_line2) > 16:
+                now = time.ticks_ms()
+                if time.ticks_diff(now, self.last_scroll_update) >= 200:
+                    self.last_scroll_update = now
+                    self.msg_scroll_offset += 1
+                    if self.msg_scroll_offset >= len(self.msg_line2) + 3:
+                        self.msg_scroll_offset = 0
+                    self.update_display()
+
             # Update confetti animation
             if self.update_confetti():
                 self.update_display()
+
+            # Check for display dim timeout
+            self.check_display_timeout()
 
             # Small delay to prevent busy-waiting
             time.sleep_ms(10)
@@ -639,6 +848,9 @@ class ButtonCounter:
 
 # Run the counter
 if __name__ == "__main__":
+    # Initialize WiFi early so chip is ready for AI taunts
+    print("Initializing WiFi...")
     connect_wifi()
+    print("Starting counter...")
     counter = ButtonCounter()
     counter.run()
