@@ -259,6 +259,22 @@ TAUNTS = [
     "(-_-)zzZ",
     "*slow clap*",
     "...really?",
+    # Puns
+    "Un-BUTTON-lievable",
+    "This is pressing",
+    "Button your lip",
+    "Push comes to shove",
+    "You're on a roll",
+    "Click bait",
+    "Pushing my buttons",
+    "That was riveting",
+    "Key performance",
+    "Tactile genius",
+    "Finger lickin good",
+    "Digit-al art",
+    "Count on it",
+    "Number one fan",
+    "Sum-thing else",
 ]
 
 # Reset taunts - shown when counter is reset
